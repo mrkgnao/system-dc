@@ -1,0 +1,47 @@
+-- This file has been generated from package.yaml by hpack version 0.21.2.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 833b96bbae53d45ec5030f10024db75006af952451dbd93c6672e4a7104d15cb
+
+name:           zeta
+version:        0.1.0.0
+homepage:       https://github.com/mrkgnao/zeta#readme
+bug-reports:    https://github.com/mrkgnao/zeta/issues
+author:         Soham Chowdhury
+maintainer:     chow.soham@gmail.com
+license:        GPL-3
+license-file:   LICENSE
+build-type:     Simple
+cabal-version:  >= 1.10
+
+extra-source-files:
+    CHANGELOG.md
+
+source-repository head
+  type: git
+  location: https://github.com/mrkgnao/zeta
+
+executable zeta
+  main-is: Main.hs
+  other-modules:
+      Pretty
+      Types
+      Paths_zeta
+  hs-source-dirs:
+      src
+  default-extensions: LambdaCase
+  build-depends:
+      QuickCheck
+    , base
+    , bound
+    , containers
+    , deriving-compat
+    , hedgehog
+    , lens
+    , mtl
+    , prettyprinter
+    , prettyprinter-ansi-terminal
+    , text
+    , vector
+  default-language: Haskell2010

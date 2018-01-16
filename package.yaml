@@ -1,0 +1,35 @@
+name: zeta
+version: 0.1.0.0
+github: mrkgnao/zeta
+synopsis: 
+description: 
+license: GPL-3
+license-file: LICENSE
+author: Soham Chowdhury
+maintainer: chow.soham@gmail.com
+copyright: 
+category: 
+build-type: Simple
+extra-source-files: 
+  - CHANGELOG.md
+
+executable:
+  main: Main.hs
+  source-dirs: src
+
+dependencies:
+  - base
+  - bound
+  - prettyprinter
+  - prettyprinter-ansi-terminal
+  - deriving-compat
+  - lens
+  - containers
+  - vector
+  - text
+  - mtl
+  - hedgehog
+  - QuickCheck
+
+default-extensions:
+  - LambdaCase
