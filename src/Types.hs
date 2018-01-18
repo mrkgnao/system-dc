@@ -1,4 +1,7 @@
+{-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 {-# LANGUAGE DeriveFoldable             #-}
+{-# LANGUAGE FunctionalDependencies             #-}
+{-# LANGUAGE MultiParamTypeClasses             #-}
 {-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE DeriveTraversable          #-}
 {-# LANGUAGE EmptyCase                  #-}
@@ -9,6 +12,7 @@
 {-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE PatternSynonyms            #-}
+{-# LANGUAGE PolyKinds                  #-}
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
@@ -16,12 +20,6 @@
 
 -- | Basic types
 module Types where
-
-import           Bound.Class
-import           Bound.Name
-import           Bound.Scope.Simple
-import           Bound.Term
-import           Bound.Var
 
 import           Control.Monad.Except
 import           Control.Monad.Reader
@@ -49,9 +47,17 @@ import           Data.Semigroup              (Semigroup)
 import           Data.Traversable
 import           Data.Void
 
--- https://github.com/sweirich/corespec/blob/62dceb43298186b3701c56dca63865f4f0a19f90/src/FcEtt/ett_ott.v
+type CoScope1 b x y = Scope1 b Co x y
 
-type Scope1 = Scope ()
+-- _Scope
+--   :: Iso
+--        (Scope t b f a)
+--        (Scope t b' f a')
+--        (f (Bind t b (f a)))
+--        (f (Bind t b' (f a')))
+-- _Scope = iso unScope Scope
+
+type Scope1 t = Scope t ()
 
 type FamName = Text
 
@@ -59,124 +65,177 @@ type DataConName = Text
 
 type Konst = Text
 
-data Rel
-  = Rel
-  | Irrel
-  deriving Show
+data Rel = Rel | Irrel
 
--- | Terms and types
-data Tm c t
-  = TmStar
-  | TmVar t
-  | TmConv (Tm c t) (Co t c)
-  -- | TmLam Rel (Tm c t) (Scope1 (Tm c) t)
-  -- | TmULam Rel (Scope1 (Tm c) t)
-  -- | TmApp (Tm c t) Rel (Tm c t)
-  -- | TmFam FamName
-  -- | TmKonst Konst
-  -- | TmPi Rel (Tm c t) (Scope1 (Tm c) t)
-  -- | TmCPi (Ct c t) (Scope1 (Tm c) t)
-  -- | TmCLam (Ct c t) (Scope1 (Tm c) t)
-  -- | TmUCLam (Scope1 (Tm c) t)
-  -- | TmBullet
-  -- | TmDataCon DataConName
-  -- | TmCase (Tm c t) (Brs c t)
+data Ct x y = CtEq (Tm x y) (Tm x y) (Tm x y)
 
-data Co t c
-  = CoTriv
-  | CoVar c
-  -- | CoBeta (Tm c a) (Tm c a)
-  | CoRefl (Tm c t)
-  -- | CoReflBy (Tm c a) (Tm c a) (Co c a)
-  | CoSym (Co t c)
-  -- | CoTrans (Co c a) (Co c a)
-  -- | CoPiCong Rel (Co c a) (Co c a)
-  -- | CoLamCong Rel (Co c a) (Co c a)
-  -- | CoAppCong (Co c a) Rel (Co c a)
-  -- | CoPiFst (Co c a)
-  -- | CoCPiFst (Co c a)
-  -- | CoIsoSnd (Co c a)
-  -- | CoPiSnd (Co c a) (Co c a)
-  -- | CoCPiCong (Co c a) (Co c a)
-  -- | CoCLamCong (Co c a) (Co c a) (Co c a)
-  -- | CoCAppCong (Co c a) (Co c a) (Co c a)
-  -- | CoCPiSnd (Co c a) (Co c a) (Co c a)
-  -- | CoCast (Co c a) (Co c a)
-  -- | CoEqCong (Co c a) (Tm c a) (Co c a)
-  -- | CoIsoConv (Ct c a) (Ct c a) (Co c a)
-  -- | CoEta (Tm c a)
-  -- | CoLeft (Co c a) (Co c a)
-  -- | CoRight (Co c a) (Co c a)
+type ClosedTm = Tm Void Void
+type ClosedCo = Co Void Void
 
--- data Ct c a = CtEq (Tm c a) (Tm c a) (Tm c a)
---   deriving Functor
+newtype CoBind x = CoBind x deriving (Functor, Foldable, Traversable)
+newtype TmBind y = TmBind y deriving (Functor, Foldable, Traversable)
 
--- data Brs c a
---   = BrNone
---   | BrOne DataConName (Tm c a) (Brs c a)
---   deriving Functor
+data Var t b a = B b | F a deriving (Functor, Foldable, Traversable)
 
--- instance Applicative Tm where
---   pure = return
---   (<*>) = ap
+newtype Scope t b f x a = Scope { unScope :: f x (Var t b (f x a)) }
+  deriving (Functor, Foldable, Traversable)
 
--- instance Monad Tm where
---   return = TmVar
---   tm >>= f = case tm of
---     TmVar a -> f a
---     TmStar -> TmStar
---     TmFam f -> TmFam f
---     TmKonst k -> TmKonst k
---     TmApp x r y -> TmApp (x >>= f) r (y >>= f)
---     TmPi r t s  -> TmPi r (t >>= f) (s >>>= f)
---     TmLam r t s -> TmLam r (t >>= f) (s >>>= f)
---     TmULam r s  -> TmULam r (s >>>= f)
---     TmCPi c s -> TmCPi (c & terms %~ (>>= f)) (s >>>= f)
---     TmCLam c s -> TmCLam (c & terms %~ (>>= f)) (s >>>= f)
---     TmUCLam s -> TmUCLam (s >>>= f)
---     TmBullet -> TmBullet
---     TmDataCon d -> TmDataCon d
---     TmConv t c -> TmConv (t >>= f) (c & terms %~ (>>= f))
---     TmCase _ _ -> undefined
+-- | Term containing coercion variables of type x and term variables of type y.
+data Tm x y where
+  -- | Star
+  TmStar :: Tm x y
 
--- class HasTerms t where
---   terms :: Traversal (t a) (t b) (Tm a) (Tm b)
+  TmVar  :: TmBind y -> Tm x y
 
--- instance HasTerms Tm where
---   terms
---     :: forall f a b
---      . Applicative f
---     => (Tm a -> f (Tm b))
---     -> Tm a -> f (Tm b)
---   terms f x = case x of
---     TmApp x r y -> TmApp <$> f x <*> pure r <*> f y
---     TmPi r t s  -> TmPi r <$> f t <*> terms f s
---     TmStar      -> pure TmStar
---     TmVar{}     -> f x
+  TmConv :: Tm x y -> Co y x -> Tm x y
 
--- instance (Traversable t, HasTerms t) => HasTerms (Scope b t) where
---   terms
---     :: forall f x y
---      . Applicative f
---     => (Tm x -> f (Tm y))
---     -> Scope b t x -> f (Scope b t y)
---   terms f s = Scope <$> traverse (traverse (terms f)) (unscope s)
+  -- Term binding forms
 
--- instance HasTerms Co where
---   terms :: Prism (Co a) (Co b) (Tm a) (Tm b)
---   terms = prism CoRefl undefined
+  TmPi   :: Rel -> Tm x y -> Scope1 TmBind Tm x y -> Tm x y
+  TmLam  :: Rel -> Tm x y -> Scope1 TmBind Tm x y -> Tm x y
+  TmULam :: Rel ->           Scope1 TmBind Tm x y -> Tm x y
 
--- instance HasTerms Ct where
---   terms
---     :: forall f a b
---      . Applicative f
---     => (Tm a -> f (Tm b))
---     -> Ct a -> f (Ct b)
---   terms f (CtEq a b c) = CtEq <$> f a <*> f b <*> f c
+  -- Coercion binding forms
 
--- instance Show a => Show (Tm c a) where showsPrec = showsPrec1
+  TmCPi   :: Ct x y -> Scope1 CoBind Co y x -> Tm x y
+  TmCLam  :: Ct x y -> Scope1 CoBind Co y x -> Tm x y
+  TmUCLam ::           Scope1 CoBind Co y x -> Tm x y
 
--- deriveShow1 ''Tm
--- deriveShow1 ''Brs
--- deriveShow1 ''Ct
--- deriveShow1 ''Co
+  TmApp :: Rel -> Tm x y -> Tm x y -> Tm x y
+
+  -- Constants
+
+  TmFam :: FamName -> Tm x y
+  TmKonst :: Konst -> Tm x y
+  TmDataCon :: DataConName -> Tm x y
+
+  TmBullet :: Tm x y
+  TmCase :: Tm x y -> [Tm x y] -> Tm x y
+
+-- | Coercion containing coercion variables of type x and term variables of type y.
+data Co y x where
+  -- | Represented as a bullet.
+  CoTriv :: Co y x
+
+  -- | Coercion variables.
+  CoVar :: CoBind x -> Co y x
+
+  -- | Beta-reduction.
+  CoBeta :: Tm x y -> Tm x y -> Co y x
+
+  -- | Homogeneous equality.
+  CoVarl :: Tm x y -> Co y x
+
+  -- | Homogeneous equality via a coercion.
+  CoVarlBy :: Co y x -> Tm x y -> Tm x y -> Co y x
+
+  -- | Symmetry
+  CoSym :: Co y x -> Co y x
+
+  -- Transitivity
+  CoTrans :: Co y x -> Co y x -> Co y x
+
+  CoPiCong  :: Rel -> Co y x -> Scope1 TmBind Co y x -> Co y x
+  CoLamCong :: Rel -> Co y x -> Scope1 CoBind Co y x -> Co y x
+  CoAppCong :: Rel -> Co y x -> Co y x -> Co y x
+
+  CoPiFst :: Co y x -> Co y x
+  CoCPiFst :: Co y x -> Co y x
+  CoIsoSnd :: Co y x -> Co y x
+
+  -- | @CoPiSnd γ1 γ2 =@ \(\gamma_1 @ \gamma_2\)
+  CoPiSnd :: Co y x -> Co y x -> Co y x
+
+  -- | \(\forall c: \gamma_1 . \gamma_2\)
+  CoCPiCong :: Co y x -> Co y x -> Co y x
+
+  -- | \(\lambda c: \gamma_1 . \gamma_2 @ \gamma_3\)
+  CoCLamCong :: Co y x -> Co y x -> Co y x -> Co y x
+
+  -- | \(g (\gamma_1, \gamma_2)\)
+  CoCAppCong :: Co y x -> Co y x -> Co y x -> Co y x
+
+  -- | \(g @ (\gamma_1 ~ \gamma_2)\)
+  CoCPiSnd :: Co y x -> Co y x -> Co y x -> Co y x
+
+  -- | \(\gamma_1 \triangleright \gamma_2\)
+  CoCast :: Co y x -> Co y x -> Co y x
+
+  -- | \(\gamma_1 \sim_A \gamma_2\)
+  CoEqCong :: Tm x y -> Co y x -> Co y x -> Co y x
+
+  -- | \({\sf conv} \phi_1 \sim_\gamma \phi_2\)
+  CoIsoConv :: Ct x y -> Co y x -> Ct x y -> Co y x
+
+  -- | \({\sf eta} a\)
+  CoEta :: Tm x y -> Co y x
+
+  -- | \({\sf left} \gamma \gamma'\)
+  CoLeft :: Co y x -> Co y x -> Co y x
+
+  -- | \({\sf right} \gamma \gamma'\)
+  CoRight :: Co y x -> Co y x -> Co y x
+
+bimapCt :: forall x x' y y' . (x -> x') -> (y -> y') -> Ct x y -> Ct x' y'
+bimapCt fx fy (CtEq a b c) = CtEq (go a) (go b) (go c)
+  where go = bimapTm fx fy
+
+bimapCo :: (y -> y') -> (x -> x') -> Co y x -> Co y' x'
+bimapCo fy fx = \case
+  CoTriv           -> CoTriv
+  CoVar (CoBind x) -> CoVar (CoBind (fx x))
+
+bimapTm :: forall x x' y y' . (x -> x') -> (y -> y') -> Tm x y -> Tm x' y'
+bimapTm fx fy =
+  let goTm = bimapTm fx fy
+      goCo = bimapCo fy fx
+      goTmScope :: Bifunctor f => Scope t b f x y -> Scope t b f x' y'
+      goTmScope = bimapScope fx fy
+      goCoScope :: Bifunctor f => Scope t b f y x -> Scope t b f y' x'
+      goCoScope = bimapScope fy fx
+  in  \case
+        TmStar           -> TmStar
+        TmVar (TmBind y) -> TmVar (TmBind (fy y))
+        TmConv tm co     -> TmConv (goTm tm) (goCo co)
+        TmULam r  sc     -> TmULam r (goTmScope sc)
+        TmUCLam sc       -> TmUCLam (goCoScope sc)
+
+instance Bifunctor Tm where bimap = bimapTm
+instance Bifunctor Co where bimap = bimapCo
+instance Bifunctor Ct where bimap = bimapCt
+
+instance Bifunctor f => Bifunctor (Scope t b f) where bimap = bimapScope
+
+bimapScope
+  :: Bifunctor f
+  => (x -> x')
+  -> (y -> y')
+  -> Scope t b f x y
+  -> Scope t b f x' y'
+bimapScope fx fy = Scope . bimap fx (fmap (bimap fx fy)) . unScope
+
+class (Bifunctor l, Bifunctor r) => Bimonad l r | l -> r, r -> l where
+  lreturn :: x -> l x y
+  rreturn :: x -> r x y
+
+-- bindCo :: (x -> Co y' x') -> (y -> Tm x' y') -> Co y x -> Co y' x'
+-- bindCo cf tf = \case
+--   CoVar x -> cf x
+
+-- bindScope
+--   :: (x -> x')
+--   -> (y -> Tm x' y')
+--   -> (x -> Co y' x')
+--   -> Scope1 TmBind Tm x y
+--   -> Scope1 TmBind (Tm x') y'
+-- bindScope xx' yf xf (Scope s) = Scope (bimapTm xx' (fmap (bindTm xx' yf xf)) s)
+--  -- Scope (fmap (fmap (fmap (bindTm yf xf))) s)
+
+-- bimapTm :: (x -> x') -> (y -> y') -> Tm x y -> Tm x' y'
+-- bimapTm xa yb = \case
+--   TmVar y -> TmVar (yb y)
+
+-- bimapCo :: (y -> b) -> (x -> a) -> Co y x -> Co b a
+-- bimapCo yb xa = \case
+--   CoVar x -> CoVar (xa x)
+

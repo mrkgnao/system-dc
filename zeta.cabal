@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 833b96bbae53d45ec5030f10024db75006af952451dbd93c6672e4a7104d15cb
+-- hash: eff4949200882843d8cb9c5c55fe617529c5cca5dd4828ea168ffbc02860822f
 
 name:           zeta
 version:        0.1.0.0
@@ -33,15 +33,19 @@ executable zeta
   default-extensions: LambdaCase
   build-depends:
       QuickCheck
+    , adjunctions
     , base
     , bound
+    , comonad
     , containers
     , deriving-compat
+    , free
     , hedgehog
     , lens
     , mtl
     , prettyprinter
     , prettyprinter-ansi-terminal
     , text
+    , transformers
     , vector
   default-language: Haskell2010

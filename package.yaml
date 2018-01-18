@@ -28,8 +28,12 @@ dependencies:
   - vector
   - text
   - mtl
+  - transformers
   - hedgehog
   - QuickCheck
+  - free
+  - comonad
+  - adjunctions
 
 default-extensions:
   - LambdaCase

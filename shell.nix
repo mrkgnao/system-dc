@@ -52,6 +52,8 @@ in
       unordered-containers
       QuickCheck
       hedgehog
+      free
+      comonad
     ];
 
     # Optionally, also add sets of related packages that are
