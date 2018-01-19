@@ -191,6 +191,7 @@ ulam = lam
 
 newtype Tm a = Tm a
 newtype Co a = Co a
+newtype Ct a = Ct a
 
 newtype V a = V Int
 
@@ -204,8 +205,6 @@ instance TestEquality V where
     | otherwise = Nothing
 
 type Scope1 a = Scope a V
-data Ct f a = CtEq (Term f a) (Term f a) (Term f a)
-  -- deriving (Show)
 
 type Term f a = Syn f (Tm a)
 type Coer f a = Syn f (Co a)
@@ -272,12 +271,12 @@ data Syn (f :: * -> *) (q :: *) where
   -- | Coercion-level pi-abstraction
   --
   -- @TmCPi phi B@ = \( \forall \phi. B\)
-  TmCPi   :: Ct f a -> BindCo Syn f Tm a -> Syn f (Tm a)
+  TmCPi   :: Syn f (Ct a) -> BindCo Syn f Tm a -> Syn f (Tm a)
 
   -- | Coercion-level lambda-abstraction, with type
   --
   -- \( \Lambda \phi. B\)
-  TmCLam  :: Ct f a -> BindCo Syn f Tm a -> Syn f (Tm a)
+  TmCLam  :: Syn f (Ct a) -> BindCo Syn f Tm a -> Syn f (Tm a)
 
   -- | Coercion-level lambda-abstraction
   --
@@ -359,7 +358,7 @@ data Syn (f :: * -> *) (q :: *) where
   CoEqCong :: Syn f (Tm a) -> Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
 
   -- | \({\sf conv} \phi_1 \sim_\gamma \phi_2\)
-  CoIsoConv :: Ct f a -> Syn f (Co a) -> Ct f a -> Syn f (Co a)
+  CoIsoConv :: Syn f (Ct a) -> Syn f (Co a) -> Syn f (Ct a) -> Syn f (Co a)
 
   -- | \({\sf eta} a\)
   CoEta :: Syn f (Tm a) -> Syn f (Co a)
@@ -370,14 +369,13 @@ data Syn (f :: * -> *) (q :: *) where
   -- | \({\sf right} \gamma \gamma'\)
   CoRight :: Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
 
+  CtEqual :: Term f a -> Term f a -> Term f a -> Syn f (Tm a)
+
 instance HFunctor Syn where
   hmap = hmapDefault
 
 instance HTraversable Syn where
   htraverse = synTraverse
-
-instance HFunctor Ct where
-  hmap f (CtEq a b c) = CtEq (hmap f a) (hmap f b) (hmap f c)
 
 instance HMonad Syn where
   hreturn = SynVar
@@ -404,6 +402,7 @@ synTraverse
   -> (forall x . Syn f x -> m (Syn g x))
 synTraverse phi x = case x of
   SynVar v              -> SynVar <$> phi v
+  CtEqual t1 t2 t3      -> CtEqual <$> goSyn t2 <*> goSyn t2 <*> goSyn t3
   ---
   TmStar                -> pure TmStar
   TmConv t c            -> TmConv <$> goSyn t <*> goSyn c
@@ -411,8 +410,8 @@ synTraverse phi x = case x of
   TmLam r t s           -> TmLam r <$> goSyn t <*> goScope s
   TmULam r st           -> TmULam r <$> goScope st
   TmApp r t1 t2         -> TmApp r <$> goSyn t1 <*> goSyn t2
-  TmCPi  ct s           -> TmCPi <$> goCt ct <*> goScope s
-  TmCLam ct s           -> TmCLam <$> goCt ct <*> goScope s
+  TmCPi  ct s           -> TmCPi <$> goSyn ct <*> goScope s
+  TmCLam ct s           -> TmCLam <$> goSyn ct <*> goScope s
   TmUCLam s             -> TmUCLam <$> goScope s
   TmCApp t c            -> TmCApp <$> goSyn t <*> goSyn c
   TmFam     famName     -> pure (TmFam famName)
@@ -440,7 +439,7 @@ synTraverse phi x = case x of
   CoCPiSnd   c1 c2 c3   -> CoCPiSnd <$> goSyn c1 <*> goSyn c2 <*> goSyn c3
   CoCast c1 c2          -> CoCast <$> goSyn c1 <*> goSyn c2
   CoEqCong  t  c1 c2    -> CoEqCong <$> goSyn t <*> goSyn c1 <*> goSyn c2
-  CoIsoConv ct c  ct'   -> CoIsoConv <$> goCt ct <*> goSyn c <*> goCt ct'
+  CoIsoConv ct c  ct'   -> CoIsoConv <$> goSyn ct <*> goSyn c <*> goSyn ct'
   CoEta t               -> CoEta <$> goSyn t
   CoLeft  c1 c2         -> CoLeft <$> goSyn c1 <*> goSyn c2
   CoRight c1 c2         -> CoRight <$> goSyn c1 <*> goSyn c2
@@ -453,12 +452,11 @@ synTraverse phi x = case x of
     => s Syn f x
     -> m (s Syn g x)
   goScope = htraverse phi
-  goCt :: forall x . Ct f x -> m (Ct g x)
-  goCt (CtEq a b c) = CtEq <$> goSyn a <*> goSyn b <*> goSyn c
 
 synBind :: forall f g a . Syn f a -> f ~> Syn g -> Syn g a
 synBind x phi = case x of
   SynVar v               -> phi v
+  CtEqual t1 t2 t3       -> CtEqual (goSyn t1) (goSyn t2) (goSyn t3)
   -----
   TmStar                 -> TmStar
   TmConv tm co           -> TmConv (goSyn tm) (goSyn co)
@@ -466,8 +464,8 @@ synBind x phi = case x of
   TmLam r tm sc          -> TmLam r (goSyn tm) (goScope sc)
   TmULam r sctm          -> TmULam r (goScope sctm)
   TmApp r tm1 tm2        -> TmApp r (goSyn tm1) (goSyn tm2)
-  TmCPi  ct scco         -> TmCPi (goCt ct) (goScope scco)
-  TmCLam ct scco         -> TmCLam (goCt ct) (goScope scco)
+  TmCPi  ct scco         -> TmCPi (goSyn ct) (goScope scco)
+  TmCLam ct scco         -> TmCLam (goSyn ct) (goScope scco)
   TmUCLam sc             -> TmUCLam (goScope sc)
   TmCApp tm co           -> TmCApp (goSyn tm) (goSyn co)
   TmFam     famName      -> TmFam famName
@@ -495,7 +493,7 @@ synBind x phi = case x of
   CoCPiSnd   co1 co2 co3 -> CoCPiSnd (goSyn co1) (goSyn co2) (goSyn co3)
   CoCast co1 co2         -> CoCast (goSyn co1) (goSyn co2)
   CoEqCong  tm co1 co2   -> CoEqCong (goSyn tm) (goSyn co1) (goSyn co2)
-  CoIsoConv ct co  ct'   -> CoIsoConv (goCt ct) (goSyn co) (goCt ct')
+  CoIsoConv ct co  ct'   -> CoIsoConv (goSyn ct) (goSyn co) (goSyn ct')
   CoEta tm               -> CoEta (goSyn tm)
   CoLeft  co1 co2        -> CoLeft (goSyn co1) (goSyn co2)
   CoRight co1 co2        -> CoRight (goSyn co1) (goSyn co2)
@@ -504,8 +502,6 @@ synBind x phi = case x of
   goSyn = (>>- phi)
   goScope :: HBound s => s Syn f a -> s Syn g a
   goScope = (>>>- phi)
-  goCt :: Ct f ~> Ct g
-  goCt (CtEq a b c) = CtEq (goSyn a) (goSyn b) (goSyn c)
 
 -- Type-level list stuff
 
@@ -662,8 +658,8 @@ instance HTraversable HVec where
 --  TmLam r t s           -> TmLam r (goSyn t) (goScope s)
 --  TmULam r st           -> TmULam r (goScope st)
 --  TmApp r t1 t2         -> TmApp r (goSyn t1) (goSyn t2)
---  TmCPi  ct s           -> TmCPi (goCt ct) (goScope s)
---  TmCLam ct s           -> TmCLam (goCt ct) (goScope s)
+--  TmCPi  ct s           -> TmCPi (goSyn ct) (goScope s)
+--  TmCLam ct s           -> TmCLam (goSyn ct) (goScope s)
 --  TmUCLam s             -> TmUCLam (goScope s)
 --  TmCApp t c            -> TmCApp (goSyn t) (goSyn c)
 --  TmFam     famName     -> TmFam famName
@@ -691,7 +687,7 @@ instance HTraversable HVec where
 --  CoCPiSnd   c1 c2 c3   -> CoCPiSnd (goSyn c1) (goSyn c2) (goSyn c3)
 --  CoCast c1 c2          -> CoCast (goSyn c1) (goSyn c2)
 --  CoEqCong  t  c1 c2    -> CoEqCong (goSyn t) (goSyn c1) (goSyn c2)
---  CoIsoConv ct c  ct'   -> CoIsoConv (goCt ct) (goSyn c) (goCt ct')
+--  CoIsoConv ct c  ct'   -> CoIsoConv (goSyn ct) (goSyn c) (goSyn ct')
 --  CoEta t               -> CoEta (goSyn t)
 --  CoLeft  c1 c2         -> CoLeft (goSyn c1) (goSyn c2)
 --  CoRight c1 c2         -> CoRight (goSyn c1) (goSyn c2)
@@ -703,6 +699,6 @@ instance HTraversable HVec where
 --     . (HBound s, HFunctor (s Syn))
 --    => s Syn f ~> s Syn g
 --  goScope = hmap phi
---  goCt :: Ct f ~> Ct g
---  goCt (CtEq a b c) = CtEq (goSyn a) (goSyn b) (goSyn c)
+--  goSyn :: Ct f ~> Ct g
+--  goSyn (CtEq a b c) = CtEq (goSyn a) (goSyn b) (goSyn c)
 
