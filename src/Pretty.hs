@@ -9,8 +9,6 @@
 
 module Pretty where
 
-import           Types
-
 import           Control.Applicative
 import           Control.Lens
 import           Data.Foldable
@@ -27,6 +25,7 @@ import qualified Data.Text.Lazy.IO                         as TL
 
 import           Control.Monad.Reader
 import           Data.String
+import Prelude hiding ((^^))
 
 type Out = Doc AnsiStyle
 
@@ -126,8 +125,6 @@ nesting f = PprM (\env -> P.nesting (pprWithEnv env . f))
 punctuate :: Out -> [Out] -> [OutM]
 punctuate o = fmap pure . P.punctuate o
 
--- punctuate :: OutM -> PprM [Out] -> PprM [Out]
--- punctuate p os = P.punctuate <$> p <*> os
 infixr 5 <+>
 
 (<+>) :: OutM -> OutM -> OutM
@@ -145,7 +142,7 @@ precedence = lens _pprEnv_precedence (\e prec -> e {_pprEnv_precedence = prec})
 
 newtype PprM a = PprM
   { unPprM :: PprEnv -> a
-  } deriving (Functor, Applicative, Monad, MonadReader PprEnv, Semigroup)
+  } deriving (Functor, Applicative, Monad, MonadReader PprEnv)
 
 pprWithEnv :: PprEnv -> PprM a -> a
 pprWithEnv = flip unPprM
@@ -158,31 +155,43 @@ runPprM f = unPprM f iEnv
 assoc :: Int -> PprM a -> PprM a
 assoc p = local (precedence .~ p)
 
-infixr 8 %%
-
-(%%) = assoc
-
 pprPure :: Pretty a => a -> Out
 pprPure = runPprM . ppr
-
-class Pretty a where
-  ppr :: a -> OutM
 
 wrapOn :: Bool -> (PprM a -> PprM a) -> PprM a -> PprM a
 wrapOn c f =
   if c
     then f
     else id
-
 {-# INLINE wrapOn #-}
 above :: Int -> (PprM a -> PprM a) -> PprM a -> PprM a
 above p f m = do
   outerPrec <- view precedence
   wrapOn (outerPrec > p) f (assoc (p + 1) m)
 
-infixr 8 ^^
-
-prec ^^ body = above prec parens body
-
 nowrap :: PprM a -> PprM a
 nowrap = assoc (-1)
+
+infixr 8 %%
+(%%) = assoc
+
+infixr 8 ^^
+prec ^^ body = above prec parens body
+
+class Pretty a where
+  ppr :: a -> OutM
+
+class Pretty1 f where
+  liftPpr :: (a -> OutM) -> f a -> OutM
+
+  ppr1 :: Pretty a => f a -> OutM
+  ppr1 = liftPpr ppr
+
+instance IsString OutM where fromString = pure . fromString
+
+instance Pretty1 Identity where
+  liftPpr pp (Identity a) = 10 ^^ ("Identity" <+> 11 %% pp a)
+
+instance Pretty Char where ppr = fromString . show
+
+instance (Pretty1 f, Pretty a) => Pretty (f a) where ppr = ppr1

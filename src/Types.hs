@@ -1,4 +1,7 @@
 {-# LANGUAGE DataKinds                  #-}
+{-# LANGUAGE DeriveGeneric                  #-}
+{-# LANGUAGE FlexibleContexts                  #-}
+{-# LANGUAGE TypeApplications                  #-}
 {-# LANGUAGE DeriveFoldable             #-}
 {-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE DeriveTraversable          #-}
@@ -20,16 +23,7 @@
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE UndecidableInstances       #-}
 
-module Types
-  (
-  -- * Scope
-  Var(..),Scope(..),
-  -- * \"HPrelude\" classes
-  HFunctor(..), HFoldable(..), HTraversable(..),
-  HMonad(..),
-  -- * Terms
-  Syn(..)
-  )where
+module Types where
 
 import           Control.Monad.Except
 import           Control.Monad.Reader
@@ -60,9 +54,12 @@ import           Data.Traversable
 import           Data.Type.Equality
 import           Data.Unique
 import           Data.Void
+import GHC.Show
 
-import           System.IO.Unsafe
 import           Unsafe.Coerce
+import GHC.Generics (Generic)
+
+import Pretty
 
 type FamName = Text
 
@@ -70,9 +67,10 @@ type DataConName = Text
 
 type Konst = Text
 
-data Rel = Rel | Irrel
+data Rel = Rel | Irrel deriving (Show, Eq)
 
 type (~>) f g = forall x. f x -> g x
+type (|>) f a = forall x. f x -> a
 
 infixl 1 >>-
 infixl 1 >>>-
@@ -149,8 +147,24 @@ instance HBound (Scope q b) where
 
 data Var (q :: k) b f (a :: *) = B (b a) | F (f a)
 
--- | The tagged scope transformer.
-newtype Scope (q :: k) b t f (a :: *) = Scope { unscope :: t (Var q b (t f)) a }
+-- | The tagged higher-order scope transformer.
+--
+-- 'Scope' @q b t f a@ is a @t f@-expression with bound variables in @b a@ and
+-- free variables in @f a@.
+
+newtype Scope q b t f a where
+  Scope
+    :: forall
+         (q :: k)
+         (b :: * -> *)
+         (t :: (* -> *) -> * -> *)
+         (f :: * -> *)
+         (a :: *)
+     . t (Var q b (t f)) a
+    -> Scope q b t f a
+
+unscope :: Scope q b t f a -> t (Var q b (t f)) a
+unscope (Scope s) = s
 
 --------------------------------------------------------------------------------
 -- Bound operations
@@ -166,13 +180,6 @@ abstract f = Scope . hmap
     Nothing -> F (hreturn y)
   )
 
--- Lam :: Scope ((:~:) b) Remote f a -> Remote f (b -> a)
--- lam_ :: TestEquality f => f a -> Remote f b -> Remote f (a -> b)
--- lam_ v f = Lam (abstract (v ==?) f)
-
--- abstract1 :: (Monad t, Eq f) => f -> t f -> Scope Identity t f
--- TmULam :: Rel ->               BindTm Syn f (Tm a) -> Syn f (Tm a)
-
 instantiate :: HMonad t => b ~> t f -> Scope q b t f ~> t f
 instantiate k (Scope e) = e >>- \case
   B b -> k b
@@ -181,19 +188,40 @@ instantiate k (Scope e) = e >>- \case
 closed :: HTraversable t => t f a -> Maybe (t g a)
 closed = htraverse (const Nothing)
 
-lam :: forall f a. TestEquality f => f a -> Syn f (Tm a) -> Syn f (Tm a)
-lam v f = TmULam Rel (abstract (v ==?) f)
+(==?) :: TestEquality f => f a -> f b -> Maybe (a :~: b)
+(==?) = testEquality
 
-ulam :: forall a. V a -> Syn V (Tm a) -> Syn V (Tm a)
-ulam = lam
+ulam :: forall a . Rel -> V a -> Syn V (Tm a) -> Syn V (Tm a)
+ulam rel var body = TmULam rel (abstract (var ==?) body)
+
+uapp :: Rel -> Term f a -> Term f a -> Term f a
+uapp = TmApp
+
+fix_term :: Term V a
+fix_term = ulam
+  Irrel
+  (V 0)
+  ( ulam
+    Rel
+    (V 1)
+    ( uapp
+      Rel
+      (SynVar (V 1))
+      (uapp Rel (uapp Irrel (SynVar (V 99)) TmBullet) (SynVar (V 1)))
+    )
+  )
 
 --------------------------------------------------------------------------------
 
-newtype Tm a = Tm a
-newtype Co a = Co a
-newtype Ct a = Ct a
+type Term f a = Syn f (Tm a)
+type Coer f a = Syn f (Co a)
+type Csnt f a = Syn f (Ct a)
 
-newtype V a = V Int
+newtype Tm a = Tm a deriving (Show, Generic)
+newtype Co a = Co a deriving (Show, Generic)
+newtype Ct a = Ct a deriving (Show, Generic)
+
+newtype V a = V Int deriving Show
 
 unsafeCastV :: V a -> V b
 unsafeCastV (V x) = V x
@@ -206,170 +234,196 @@ instance TestEquality V where
 
 type Scope1 a = Scope a V
 
-type Term f a = Syn f (Tm a)
-type Coer f a = Syn f (Co a)
-
 data Abs = Pi | Lam
 
-type BindTm syn f t a = Scope Tm ((:~:) a) syn f (t a)
-type BindCo syn f t a = Scope Co ((:~:) a) syn f (t a)
-
-instance Show1 ((:~:) a) where
-  liftShowsPrec _ _ _ Refl = showString "Refl"
-
-instance Show2 (:~:) where
-  liftShowsPrec2 _ _ _ _ _ Refl = showString "Refl"
-
--- syn :: Term Identity String
--- syn = SynVar (Identity (Tm "asdf"))
-
--- slam :: Term Identity String
--- slam = TmULam Irrel (abstract (const Nothing) syn)
+type TmScope1 syn f t a = Scope Tm ((:~:) a) syn f (t a)
+type CoScope1 syn f t a = Scope Co ((:~:) a) syn f (t a)
 
 -- | Tagged explicit core syntax.
+--
+-- Since our representation of variable binding is locally nameless,
+-- our binding forms will necessarily look different from the 
+-- actual paper.
+--
+-- @\<binding form\>.                      \<body of binding\>@ \(=\)
+-- \( {\sf BindingForm}\,\, v. {\sf BindingBody} \)
+--
+-- @\<binding form\> \<type of variable\>. \<body of binding\>@ \(=\)
+-- \( {\sf BindingForm} (v : {\sf TypeOfVariable}). {\sf BindingBody} \)
+--
+-- For example, \(\Pi^\rho (x:A) \to B\) is represented as 'TmPi' @rho A B@, where @B@ has an extra bound variable in scope, which corresponds to the \(x\) of the original, named syntax.
+--
+-- In addition, we also abbreviate some constructor arguments for ease of reading:
+--
+-- @
+-- type 'Term' f a = Syn f (Tm a)
+-- type 'Coer' f a = Syn f (Co a)
+-- type 'Csnt' f a = Syn f (Ct a)
+-- @
+
 data Syn (f :: * -> *) (q :: *) where
   -- | Variables.
   SynVar  :: f a -> Syn f a
 
   -- Term variables.
-  -- TmVar  :: f a -> Syn f (Tm a)
+  -- TmVar  :: f a -> Term f a
 
   -- | The type of types.
   --
   -- 'TmStar' @=@ \(\star\)
-  TmStar :: Syn f (Tm a)
+  --
+  -- \ 
+  TmStar :: Term f a
 
   -- | Coercions applied to terms.
   --
   -- 'TmConv' @a gamma =@ \(a \triangleright \gamma\)
-  TmConv :: Syn f (Tm a) -> Syn f (Co a) -> Syn f (Tm a)
+  --
+  -- \ 
+  TmConv :: Term f a -> Coer f a -> Term f a
 
   -- Term binding forms
 
   -- | Pi-types annotated with relevance.
   --
   -- 'TmPi' @rho A B =@ \( \Pi^\rho A \to B \)
-  TmPi   :: Rel -> Syn f (Tm a) -> BindTm Syn f Tm a -> Syn f (Tm a)
+  --
+  -- \ 
+  TmPi   :: Rel -> Term f a -> TmScope1 Syn f Tm a -> Term f a
 
   -- | Type-annotated lambda-abstractions, annotated with relevance.
   --
   -- 'TmLam' @rho A b =@ \( \lambda^\rho A. b \)
-  TmLam  :: Rel -> Syn f (Tm a) -> BindTm Syn f Tm a -> Syn f (Tm a)
+  --
+  -- \ 
+  TmLam  :: Rel -> Term f a -> TmScope1 Syn f Tm a -> Term f a
 
   -- | Implicit lambda-abstractions, annotated with relevance.
   --
   -- 'TmULam' @rho b = @ \( \lambda^\rho. b\)
-  TmULam :: Rel ->               BindTm Syn f Tm a -> Syn f (Tm a)
+  --
+  -- \ 
+  TmULam :: Rel -> TmScope1 Syn f Tm a -> Term f a
 
   -- | Applications, with relevance
   --
   -- \(a b^\rho\)
-  TmApp :: Rel -> Syn f (Tm a) -> Syn f (Tm a) -> Syn f (Tm a)
+  --
+  -- \ 
+  TmApp :: Rel -> Term f a -> Term f a -> Term f a
 
   -- Coercion binding forms
 
   -- | Coercion-level pi-abstraction
   --
   -- @TmCPi phi B@ = \( \forall \phi. B\)
-  TmCPi   :: Syn f (Ct a) -> BindCo Syn f Tm a -> Syn f (Tm a)
+  --
+  -- \ 
+  TmCPi   :: Csnt f a -> CoScope1 Syn f Tm a -> Term f a
 
   -- | Coercion-level lambda-abstraction, with type
   --
   -- \( \Lambda \phi. B\)
-  TmCLam  :: Syn f (Ct a) -> BindCo Syn f Tm a -> Syn f (Tm a)
+  --
+  -- \ 
+  TmCLam  :: Csnt f a -> CoScope1 Syn f Tm a -> Term f a
 
   -- | Coercion-level lambda-abstraction
   --
   -- \( \Lambda. b\)
-  TmUCLam ::           BindCo Syn f Tm a -> Syn f (Tm a)
-
-  -- | \(a [\gamma]\)
   --
-  -- Coercion application
-  TmCApp  :: Syn f (Tm a) -> Syn f (Co a) -> Syn f (Tm a)
+  -- \ 
+  TmUCLam :: CoScope1 Syn f Tm a -> Term f a
+
+  -- | Coercion application
+  --
+  -- \(a [\gamma]\)
+  --
+  -- \ 
+  TmCApp  :: Term f a -> Coer f a -> Term f a
 
   -- Constants
 
-  TmFam :: FamName -> Syn f (Tm a)
-  TmKonst :: Konst -> Syn f (Tm a)
-  TmDataCon :: DataConName -> Syn f (Tm a)
+  TmFam :: FamName -> Term f a
+  TmKonst :: Konst -> Term f a
+  TmDataCon :: DataConName -> Term f a
 
-  TmBullet :: Syn f (Tm a)
-  TmCase :: Syn f (Tm a) -> [Syn f (Tm a)] -> Syn f (Tm a)
+  TmBullet :: Term f a
+  TmCase :: Term f a -> [Term f a] -> Term f a
 
   -- | \(\bullet\)
-  CoTriv :: Syn f (Co a)
+  CoTriv :: Coer f a
 
   -- Coercion variables \(c\).
-  -- CoVar :: f a -> Syn f (Co a)
+  -- CoVar :: f a -> Coer f a
 
   -- | Beta-reduction.
-  CoBeta :: Syn f (Tm a) -> Syn f (Tm a) -> Syn f (Co a)
+  CoBeta :: Term f a -> Term f a -> Coer f a
 
   -- | Homogeneous equality.
-  CoRefl :: Syn f (Tm a) -> Syn f (Co a)
+  CoRefl :: Term f a -> Coer f a
 
   -- | Homogeneous equality via a coercion.
-  CoReflBy :: Syn f (Co a) -> Syn f (Tm a) -> Syn f (Tm a) -> Syn f (Co a)
+  CoReflBy :: Coer f a -> Term f a -> Term f a -> Coer f a
 
   -- | Symmetry
-  CoSym :: Syn f (Co a) -> Syn f (Co a)
+  CoSym :: Coer f a -> Coer f a
 
   -- Transitivity
-  CoTrans :: Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
+  CoTrans :: Coer f a -> Coer f a -> Coer f a
 
   -- | \(\Pi^\rho \gamma_1 . \gamma_2\)
-  CoPiCong  :: Rel -> Syn f (Co a) -> BindTm Syn f Co a -> Syn f (Co a)
+  CoPiCong  :: Rel -> Coer f a -> TmScope1 Syn f Co a -> Coer f a
 
   -- | \(\lambda^\rho \gamma_1 . \gamma_2\)
-  CoLamCong :: Rel -> Syn f (Co a) -> BindTm Syn f Co a -> Syn f (Co a)
+  CoLamCong :: Rel -> Coer f a -> TmScope1 Syn f Co a -> Coer f a
 
   -- | \(\gamma_1 \gamma_2^\rho\)
-  CoAppCong :: Rel -> Syn f (Co a) ->           Syn f (Co a) -> Syn f (Co a)
+  CoAppCong :: Rel -> Coer f a -> Coer f a -> Coer f a
 
   -- |
-  CoPiFst :: Syn f (Co a) -> Syn f (Co a)
+  CoPiFst :: Coer f a -> Coer f a
 
   -- |
-  CoCPiFst :: Syn f (Co a) -> Syn f (Co a)
+  CoCPiFst :: Coer f a -> Coer f a
 
   -- |
-  CoIsoSnd :: Syn f (Co a) -> Syn f (Co a)
+  CoIsoSnd :: Coer f a -> Coer f a
 
-  -- | @CoPiSnd γ1 γ2 =@ \(\gamma_1 @ \gamma_2\)
-  CoPiSnd :: Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
+  -- | @CoPiSnd gamma1 gamma2 =@ \(\gamma_1 @ \gamma_2\)
+  CoPiSnd :: Coer f a -> Coer f a -> Coer f a
 
   -- | \(\forall c: \gamma_1 . \gamma_2\)
-  CoCPiCong :: Syn f (Co a) -> BindCo Syn f Co a -> Syn f (Co a)
+  CoCPiCong :: Coer f a -> CoScope1 Syn f Co a -> Coer f a
 
   -- | \(\lambda c: \gamma_1 . \gamma_2 @ \gamma_3\)
-  CoCLamCong :: Syn f (Co a) -> Syn f (Co a) -> BindCo Syn f Co a -> Syn f (Co a)
+  CoCLamCong :: Coer f a -> Coer f a -> CoScope1 Syn f Co a -> Coer f a
 
   -- | \(\gamma (\gamma_1, \gamma_2)\)
-  CoCAppCong :: Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
+  CoCAppCong :: Coer f a -> Coer f a -> Coer f a -> Coer f a
 
   -- | \(\gamma @ (\gamma_1 \sim \gamma_2)\)
-  CoCPiSnd :: Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
+  CoCPiSnd :: Coer f a -> Coer f a -> Coer f a -> Coer f a
 
   -- | \(\gamma_1 \triangleright \gamma_2\)
-  CoCast :: Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
+  CoCast :: Coer f a -> Coer f a -> Coer f a
 
   -- | \(\gamma_1 \sim_A \gamma_2\)
-  CoEqCong :: Syn f (Tm a) -> Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
+  CoEqCong :: Term f a -> Coer f a -> Coer f a -> Coer f a
 
   -- | \({\sf conv} \phi_1 \sim_\gamma \phi_2\)
-  CoIsoConv :: Syn f (Ct a) -> Syn f (Co a) -> Syn f (Ct a) -> Syn f (Co a)
+  CoIsoConv :: Csnt f a -> Coer f a -> Csnt f a -> Coer f a
 
   -- | \({\sf eta} a\)
-  CoEta :: Syn f (Tm a) -> Syn f (Co a)
+  CoEta :: Term f a -> Coer f a
 
   -- | \({\sf left} \gamma \gamma'\)
-  CoLeft :: Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
+  CoLeft :: Coer f a -> Coer f a -> Coer f a
 
   -- | \({\sf right} \gamma \gamma'\)
-  CoRight :: Syn f (Co a) -> Syn f (Co a) -> Syn f (Co a)
+  CoRight :: Coer f a -> Coer f a -> Coer f a
 
-  CtEqual :: Term f a -> Term f a -> Term f a -> Syn f (Tm a)
+  CtEqual :: Term f a -> Term f a -> Term f a -> Csnt f a
 
 instance HFunctor Syn where
   hmap = hmapDefault
@@ -386,8 +440,6 @@ hmapDefault f = runIdentity . htraverse (Identity . f)
 
 hfoldMapDefault :: (HTraversable h, Monoid m) => f |> m -> h f |> m
 hfoldMapDefault f = getConst . htraverse (Const . f)
-
-type (|>) f a = forall x. f x -> a
 
 instance HFoldable Syn where
   hfoldMap = hfoldMapDefault
@@ -503,202 +555,19 @@ synBind x phi = case x of
   goScope :: HBound s => s Syn f a -> s Syn g a
   goScope = (>>>- phi)
 
--- Type-level list stuff
+singleStep :: Term V a -> Term V a
+singleStep (TmApp rel a b) = TmApp rel (singleStep a) b
+-- singleStep (TmCApp (TmCLam phi b) g) = instantiate (\Refl -> SynVar (V 2)) b
+-- singleStep (TmApp rel (TmLam rel' _A w) a) | rel == rel' = instantiate _ w
+singleStep (TmConv (TmConv tm co1) co2) = TmConv tm (CoTrans co1 co2)
+singleStep (TmConv tm co) = TmConv (singleStep tm) co
+singleStep x = x
 
-data Ix :: [*] -> * -> * where
-  Z :: Ix (a ': as) a
-  S :: Ix as b -> Ix (a ': as) b
+lol_term :: Term V a
+lol_term = TmConv (TmConv TmStar CoTriv) CoTriv
 
-data HVec :: (* -> *) -> [*] -> * where
-  HNil :: HVec f '[]
-  HCons :: f b -> HVec f bs -> HVec f (b ': bs)
+lol_term' :: Term V a
+lol_term' = singleStep lol_term
 
-infixr 5 ++
-
--- | Concat lists of types.
-type family (++) (as :: [*]) (bs :: [*]) :: [*] where
-  '[] ++ bs = bs
-  (a ': as) ++ bs = a ': (as ++ bs)
-
-hconcat :: HVec f as -> HVec f bs -> HVec f (as ++ bs)
-hconcat HNil         bs = bs
-hconcat (HCons a as) bs = HCons a (hconcat as bs)
-
-hsingleton :: f a -> HVec f '[a]
-hsingleton x = HCons x HNil
-
-instance HFunctor HVec where
-  hmap _ HNil         = HNil
-  hmap f (HCons x xs) = HCons (f x) (hmap f xs)
-
-instance HTraversable HVec where
-  htraverse _ HNil         = pure HNil
-  htraverse f (HCons x xs) = HCons <$> f x <*> htraverse f xs
-
-(==?) :: TestEquality f => f a -> f b -> Maybe (a :~: b)
-(==?) = testEquality
-
-(!) :: HVec f v -> Ix v a -> f a
-(!) (HCons b _ ) Z     = b
-(!) (HCons _ bs) (S n) = bs ! n
-
-
--- deriving instance (Show1 f, Show a) => Show (Syn f a)
--- newtype Scope b t f a = Scope { unscope :: t (Var b (t f)) a }
--- data Remote :: (* -> *) -> * -> * where
---   Var :: f a -> Remote f a
---   Lit :: a -> Remote f a
---   Lam :: Scope ((:~:) b) Remote f a -> Remote f (b -> a)
---   Let :: HVec (Scope (Ix bs) Remote f) bs -> Scope (Ix bs) Remote f a -> Remote f a
---   Ap  :: Remote f (a -> b) -> Remote f a -> Remote f b
-
--- lit :: a -> Remote f a
--- lit = Lit
-
--- instance HFunctor Remote where
---   hmap f (Var a)    = Var (f a)
---   hmap _ (Lit t)    = Lit t
---   hmap f (Lam b)    = Lam (hmap f b)
---   hmap f (Let bs b) = Let (hmap (hmap f) bs) (hmap f b)
---   hmap f (Ap x y)   = Ap (hmap f x) (hmap f y)
-
--- instance HTraversable Remote where
---   htraverse f (Var a)    = Var <$> f a
---   htraverse _ (Lit t)    = pure $ Lit t
---   htraverse f (Lam b)    = Lam <$> htraverse f b
---   htraverse f (Let bs b) = Let <$> htraverse (htraverse f) bs <*> htraverse f b
---   htraverse f (Ap x y)   = Ap <$> htraverse f x <*> htraverse f y
-
--- instance HMonad Remote where
---   hreturn        = Var
---   Var a    >>- f = f a
---   Lit t    >>- _ = Lit t
---   Lam b    >>- f = Lam (b >>>- f)
---   Let bs b >>- f = Let (hmap (>>>- f) bs) (b >>>- f)
---   Ap x y   >>- f = Ap (x >>- f) (y >>- f)
-
--- eval :: Remote Identity a -> a
--- eval (Var w) = extract w
--- eval (Lit i) = i
--- eval (Lam b) = \a -> eval (instantiate (\Refl -> Var (Identity a)) b)
--- eval (Let bs b) = eval (instantiate (vs !) b) where vs = hmap (instantiate (vs !)) bs
--- eval (Ap x y) = eval x (eval y)
-
--- newtype V (a :: *) = V Unique
-
--- instance TestEquality V where
---   V a `testEquality` V b
---     | a == b    = Just (unsafeCoerce Refl)
---     | otherwise = Nothing
-
--- lam :: (Remote V a -> Remote V b) -> Remote V (a -> b)
--- lam f = unsafePerformIO $ do
---   x <- fmap V newUnique
---   return $ Lam $ abstract (x ==?) $ f $ Var x
-
--- data Binding a = V a := Remote V a
-
--- rhs :: Binding a -> Remote V a
--- rhs (_ := a) = a
-
--- data Bindings = forall bs. Bindings (HVec Binding bs)
-
--- elemIndex :: HVec Binding bs -> V a -> Maybe (Ix bs a)
--- elemIndex HNil              _ = Nothing
--- elemIndex ((x := r) `HCons` xs) y = case x ==? y of
---   Just Refl -> Just Z
---   Nothing   -> S <$> elemIndex xs y
-
--- instance Monoid Bindings where
---   mempty = Bindings HNil
---   Bindings xs `mappend` Bindings ys = Bindings (hconcat xs ys)
-
--- -- Allow the use of DoRec to define let statements
-
--- newtype Def a = Def { runDef :: IO (a, Bindings) }
-
--- instance Functor Def where
---   fmap f (Def m) = Def $ do
---     (a,w) <- m
---     return (f a, w)
-
--- instance Applicative Def where
---   pure = return
---   (<*>) = ap
-
--- instance Monad Def where
---   return a = Def $ return (a, mempty)
---   Def m >>= f = Def $ do
---     (a, xs) <- m
---     (b, ys) <- runDef (f a)
---     return (b, xs <> ys)
-
--- instance MonadFix Def where
---   mfix m = Def $ mfix $ \ ~(a, _) -> runDef (m a)
-
--- def :: Remote V a -> Def (Remote V a)
--- def v@Var{} = Def $ return (v, mempty) -- this thing already has a name
--- def r = Def $ do
---   v <- fmap V newUnique
---   return (Var v, Bindings (hsingleton (v := r)))
-
--- let_ :: Def (Remote V a) -> Remote V a
--- let_ (Def m) = unsafePerformIO $ do
---     (r, Bindings bs) <- m
---     return $ Let (hmap (abstract (elemIndex bs) . rhs) bs)
---                  (abstract (elemIndex bs) r)
---
---synMap :: forall f g . f ~> g -> Syn f ~> Syn g
---synMap phi x = case x of
---  SynVar v              -> SynVar (phi v)
---  -----
---  TmStar                -> TmStar
---  TmConv t c            -> TmConv (goSyn t) (goSyn c)
---  TmPi  r t s           -> TmPi r (goSyn t) (goScope s)
---  TmLam r t s           -> TmLam r (goSyn t) (goScope s)
---  TmULam r st           -> TmULam r (goScope st)
---  TmApp r t1 t2         -> TmApp r (goSyn t1) (goSyn t2)
---  TmCPi  ct s           -> TmCPi (goSyn ct) (goScope s)
---  TmCLam ct s           -> TmCLam (goSyn ct) (goScope s)
---  TmUCLam s             -> TmUCLam (goScope s)
---  TmCApp t c            -> TmCApp (goSyn t) (goSyn c)
---  TmFam     famName     -> TmFam famName
---  TmKonst   konst       -> TmKonst konst
---  TmDataCon dataConName -> TmDataCon dataConName
---  TmBullet              -> TmBullet
---  TmCase t ts           -> TmCase (goSyn t) (map goSyn ts)
---  -----
---  CoTriv                -> CoTriv
---  CoBeta t t'           -> CoBeta (goSyn t) (goSyn t')
---  CoRefl t              -> CoRefl (goSyn t)
---  CoReflBy c t t'       -> CoReflBy (goSyn c) (goSyn t) (goSyn t')
---  CoSym c1              -> CoSym (goSyn c1)
---  CoTrans c1 c2         -> CoTrans (goSyn c1) (goSyn c2)
---  CoPiCong  r c  stc    -> CoPiCong r (goSyn c) (goScope stc)
---  CoLamCong r c  stc    -> CoLamCong r (goSyn c) (goScope stc)
---  CoAppCong r c1 c2     -> CoAppCong r (goSyn c1) (goSyn c2)
---  CoPiFst  c1           -> CoPiFst (goSyn c1)
---  CoCPiFst c1           -> CoCPiFst (goSyn c1)
---  CoIsoSnd c1           -> CoIsoSnd (goSyn c1)
---  CoPiSnd   c1 c2       -> CoPiSnd (goSyn c1) (goSyn c2)
---  CoCPiCong c  s1       -> CoCPiCong (goSyn c) (goScope s1)
---  CoCLamCong c1 c2 s    -> CoCLamCong (goSyn c1) (goSyn c2) (goScope s)
---  CoCAppCong c1 c2 c3   -> CoCAppCong (goSyn c1) (goSyn c2) (goSyn c3)
---  CoCPiSnd   c1 c2 c3   -> CoCPiSnd (goSyn c1) (goSyn c2) (goSyn c3)
---  CoCast c1 c2          -> CoCast (goSyn c1) (goSyn c2)
---  CoEqCong  t  c1 c2    -> CoEqCong (goSyn t) (goSyn c1) (goSyn c2)
---  CoIsoConv ct c  ct'   -> CoIsoConv (goSyn ct) (goSyn c) (goSyn ct')
---  CoEta t               -> CoEta (goSyn t)
---  CoLeft  c1 c2         -> CoLeft (goSyn c1) (goSyn c2)
---  CoRight c1 c2         -> CoRight (goSyn c1) (goSyn c2)
--- where
---  goSyn :: Syn f ~> Syn g
---  goSyn = hmap phi
---  goScope
---    :: forall (s :: ((* -> *) -> * -> *) -> (* -> *) -> * -> *)
---     . (HBound s, HFunctor (s Syn))
---    => s Syn f ~> s Syn g
---  goScope = hmap phi
---  goSyn :: Ct f ~> Ct g
---  goSyn (CtEq a b c) = CtEq (goSyn a) (goSyn b) (goSyn c)
-
+lol_term'' :: Term V a
+lol_term'' = singleStep lol_term'
