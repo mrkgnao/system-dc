@@ -14,7 +14,6 @@
 {-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE PatternSynonyms            #-}
-{-# LANGUAGE PolyKinds                  #-}
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE StandaloneDeriving         #-}
@@ -82,10 +81,10 @@ infixr 1 -<<
 -- Higher-order versions of the standard Prelude classes and others.
 --------------------------------------------------------------------------------
 
-class HFunctor (t :: (k -> *) -> k' -> *) where
+class HFunctor (t :: (* -> *) -> * -> *) where
   hmap :: f ~> g -> t f ~> t g
 
-class HFoldable (t :: (k -> *) -> k' -> *) where
+class HFoldable (t :: (* -> *) -> * -> *) where
   hfoldMap :: Monoid m => f |> m -> t f |> m
 
 class HFunctor t => HTraversable t where
@@ -110,60 +109,59 @@ f -<< m = m >>- f
 -- Instances
 --------------------------------------------------------------------------------
 
-instance HFunctor (Var q b) where
+instance HFunctor (Var b) where
   hmap _ (B b) = B b
   hmap f (F a) = F (f a)
 
-instance HTraversable (Var q b) where
+instance HTraversable (Var b) where
   htraverse _ (B b) = pure (B b)
   htraverse f (F a) = F <$> f a
 
-instance HMonad (Var q b) where
+instance HMonad (Var b) where
   hreturn   = F
   B b >>- _ = B b
   F a >>- f = f a
 
-instance HFunctor t => HFunctor (Scope q b t) where
+instance HFunctor t => HFunctor (Scope b t) where
   hmap f = Scope . hmap (hmap (hmap f)) . unscope
 
-instance HTraversable t => HTraversable (Scope q b t) where
+instance HTraversable t => HTraversable (Scope b t) where
   htraverse f = fmap Scope . htraverse (htraverse (htraverse f)) . unscope
 
-instance HMonad t => HMonad (Scope q b t) where
+instance HMonad t => HMonad (Scope b t) where
   hreturn = Scope . hreturn . F . hreturn
   Scope e >>- f  = Scope (e >>- \case
     B b  -> hreturn (B b)
     F ea -> ea >>- unscope . f)
 
-instance HMonadTrans (Scope q b) where
+instance HMonadTrans (Scope b) where
   hlift = Scope . hreturn . F
 
-instance HBound (Scope q b) where
+instance HBound (Scope b) where
   Scope m >>>- f = Scope (hmap (hmap (>>- f)) m)
 
 --------------------------------------------------------------------------------
 -- Bound types
 --------------------------------------------------------------------------------
 
-data Var (q :: k) b f (a :: *) = B (b a) | F (f a)
+data Var b f (a :: *) = B (b a) | F (f a)
 
--- | The tagged higher-order scope transformer.
+-- | The higher-order scope transformer.
 --
--- 'Scope' @q b t f a@ is a @t f@-expression with bound variables in @b a@ and
+-- 'Scope' @b t f a@ is a @t f@-expression with bound variables in @b a@ and
 -- free variables in @f a@.
 
-newtype Scope q b t f a where
+newtype Scope b t f a where
   Scope
     :: forall
-         (q :: k)
          (b :: * -> *)
          (t :: (* -> *) -> * -> *)
          (f :: * -> *)
          (a :: *)
-     . t (Var q b (t f)) a
-    -> Scope q b t f a
+     . t (Var b (t f)) a
+    -> Scope b t f a
 
-unscope :: Scope q b t f a -> t (Var q b (t f)) a
+unscope :: Scope b t f a -> t (Var b (t f)) a
 unscope (Scope s) = s
 
 --------------------------------------------------------------------------------
@@ -173,14 +171,14 @@ unscope (Scope s) = s
 -- abstract :: Monad f => (a -> Maybe b) -> f a -> Scope b f a (original)
 -- abstract :: Monad t => (f -> Maybe b) -> t f -> Scope b t f (renamed)
 abstract
-  :: HMonad t => (forall x . f x -> Maybe (b x)) -> (t f ~> Scope q b t f)
+  :: HMonad t => (forall x . f x -> Maybe (b x)) -> (t f ~> Scope b t f)
 abstract f = Scope . hmap
   ( \y -> case f y of
     Just b  -> B b
     Nothing -> F (hreturn y)
   )
 
-instantiate :: HMonad t => b ~> t f -> Scope q b t f ~> t f
+instantiate :: HMonad t => b ~> t f -> Scope b t f ~> t f
 instantiate k (Scope e) = e >>- \case
   B b -> k b
   F a -> a
@@ -191,7 +189,7 @@ closed = htraverse (const Nothing)
 (==?) :: TestEquality f => f a -> f b -> Maybe (a :~: b)
 (==?) = testEquality
 
-ulam :: forall a . Rel -> V a -> Syn V (Tm a) -> Syn V (Tm a)
+ulam :: forall a . Rel -> V (Tm a) -> Syn V (Tm a) -> Syn V (Tm a)
 ulam rel var body = TmULam rel (abstract (var ==?) body)
 
 uapp :: Rel -> Term f a -> Term f a -> Term f a
@@ -232,14 +230,12 @@ instance TestEquality V where
     | a == b = Just (unsafeCoerce Refl)
     | otherwise = Nothing
 
-type Scope1 a = Scope a V
-
 data Abs = Pi | Lam
 
-type TmScope1 syn f t a = Scope Tm ((:~:) a) syn f (t a)
-type CoScope1 syn f t a = Scope Co ((:~:) a) syn f (t a)
+type TmScope syn f t a = Scope ((:~:) (Tm a)) syn f (t a)
+type CoScope syn f t a = Scope ((:~:) (Co a)) syn f (t a)
 
--- | Tagged explicit core syntax.
+-- | Explicit core syntax.
 --
 -- Since our representation of variable binding is locally nameless,
 -- our binding forms will necessarily look different from the 
@@ -289,21 +285,20 @@ data Syn (f :: * -> *) (q :: *) where
   -- 'TmPi' @rho A B =@ \( \Pi^\rho A \to B \)
   --
   -- \ 
-  TmPi   :: Rel -> Term f a -> TmScope1 Syn f Tm a -> Term f a
+  TmPi   :: Rel -> Term f a -> TmScope Syn f Tm a -> Term f a
 
   -- | Type-annotated lambda-abstractions, annotated with relevance.
   --
   -- 'TmLam' @rho A b =@ \( \lambda^\rho A. b \)
-  --
-  -- \ 
-  TmLam  :: Rel -> Term f a -> TmScope1 Syn f Tm a -> Term f a
+       
+  TmLam  :: Rel -> Term f a -> TmScope Syn f Tm a -> Term f a
 
   -- | Implicit lambda-abstractions, annotated with relevance.
   --
   -- 'TmULam' @rho b = @ \( \lambda^\rho. b\)
   --
   -- \ 
-  TmULam :: Rel -> TmScope1 Syn f Tm a -> Term f a
+  TmULam :: Rel -> TmScope Syn f Tm a -> Term f a
 
   -- | Applications, with relevance
   --
@@ -319,21 +314,21 @@ data Syn (f :: * -> *) (q :: *) where
   -- @TmCPi phi B@ = \( \forall \phi. B\)
   --
   -- \ 
-  TmCPi   :: Csnt f a -> CoScope1 Syn f Tm a -> Term f a
+  TmCPi   :: Csnt f a -> CoScope Syn f Tm a -> Term f a
 
   -- | Coercion-level lambda-abstraction, with type
   --
   -- \( \Lambda \phi. B\)
   --
   -- \ 
-  TmCLam  :: Csnt f a -> CoScope1 Syn f Tm a -> Term f a
+  TmCLam  :: Csnt f a -> CoScope Syn f Tm a -> Term f a
 
   -- | Coercion-level lambda-abstraction
   --
   -- \( \Lambda. b\)
   --
   -- \ 
-  TmUCLam :: CoScope1 Syn f Tm a -> Term f a
+  TmUCLam :: CoScope Syn f Tm a -> Term f a
 
   -- | Coercion application
   --
@@ -373,10 +368,10 @@ data Syn (f :: * -> *) (q :: *) where
   CoTrans :: Coer f a -> Coer f a -> Coer f a
 
   -- | \(\Pi^\rho \gamma_1 . \gamma_2\)
-  CoPiCong  :: Rel -> Coer f a -> TmScope1 Syn f Co a -> Coer f a
+  CoPiCong  :: Rel -> Coer f a -> TmScope Syn f Co a -> Coer f a
 
   -- | \(\lambda^\rho \gamma_1 . \gamma_2\)
-  CoLamCong :: Rel -> Coer f a -> TmScope1 Syn f Co a -> Coer f a
+  CoLamCong :: Rel -> Coer f a -> TmScope Syn f Co a -> Coer f a
 
   -- | \(\gamma_1 \gamma_2^\rho\)
   CoAppCong :: Rel -> Coer f a -> Coer f a -> Coer f a
@@ -394,10 +389,10 @@ data Syn (f :: * -> *) (q :: *) where
   CoPiSnd :: Coer f a -> Coer f a -> Coer f a
 
   -- | \(\forall c: \gamma_1 . \gamma_2\)
-  CoCPiCong :: Coer f a -> CoScope1 Syn f Co a -> Coer f a
+  CoCPiCong :: Coer f a -> CoScope Syn f Co a -> Coer f a
 
   -- | \(\lambda c: \gamma_1 . \gamma_2 @ \gamma_3\)
-  CoCLamCong :: Coer f a -> Coer f a -> CoScope1 Syn f Co a -> Coer f a
+  CoCLamCong :: Coer f a -> Coer f a -> CoScope Syn f Co a -> Coer f a
 
   -- | \(\gamma (\gamma_1, \gamma_2)\)
   CoCAppCong :: Coer f a -> Coer f a -> Coer f a -> Coer f a
@@ -444,7 +439,7 @@ hfoldMapDefault f = getConst . htraverse (Const . f)
 instance HFoldable Syn where
   hfoldMap = hfoldMapDefault
 
-instance HTraversable t => HFoldable (Scope q b t) where
+instance HTraversable t => HFoldable (Scope b t) where
   hfoldMap = hfoldMapDefault
 
 synTraverse
@@ -555,10 +550,10 @@ synBind x phi = case x of
   goScope :: HBound s => s Syn f a -> s Syn g a
   goScope = (>>>- phi)
 
-singleStep :: Term V a -> Term V a
+singleStep :: Term f a -> Term f a
+singleStep (TmCApp (TmCLam phi b) g) = instantiate (\Refl -> g) b
+singleStep (TmApp rel (TmLam rel' _A w) a) | rel == rel' = instantiate (\Refl -> a) w
 singleStep (TmApp rel a b) = TmApp rel (singleStep a) b
--- singleStep (TmCApp (TmCLam phi b) g) = instantiate (\Refl -> SynVar (V 2)) b
--- singleStep (TmApp rel (TmLam rel' _A w) a) | rel == rel' = instantiate _ w
 singleStep (TmConv (TmConv tm co1) co2) = TmConv tm (CoTrans co1 co2)
 singleStep (TmConv tm co) = TmConv (singleStep tm) co
 singleStep x = x
@@ -571,3 +566,7 @@ lol_term' = singleStep lol_term
 
 lol_term'' :: Term V a
 lol_term'' = singleStep lol_term'
+
+-- TODO idea:
+-- use GADT index to track more types, e.g. of binders (instead of the phantom scope thing)
+-- TmLam  :: Rel -> Term f a -> Scope Tm ((:~:) a) Syn f (Tm a -> Tm a) -> Term f a
