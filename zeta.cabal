@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: eff4949200882843d8cb9c5c55fe617529c5cca5dd4828ea168ffbc02860822f
+-- hash: b337f812fd1bc2c76186223e49dbca381addd76dbb8d7d27f0ccecb8f8e32c6a
 
 name:           zeta
 version:        0.1.0.0
@@ -25,6 +25,8 @@ source-repository head
 executable zeta
   main-is: Main.hs
   other-modules:
+      HBound
+      HPrelude
       Pretty
       Types
       Paths_zeta
@@ -35,7 +37,6 @@ executable zeta
       QuickCheck
     , adjunctions
     , base
-    , bound
     , comonad
     , containers
     , deriving-compat
