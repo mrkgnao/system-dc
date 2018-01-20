@@ -1,65 +1,22 @@
-{-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
-{-# LANGUAGE DataKinds                  #-}
-{-# LANGUAGE DeriveFoldable             #-}
-{-# LANGUAGE DeriveFunctor              #-}
-{-# LANGUAGE DeriveGeneric              #-}
-{-# LANGUAGE DeriveTraversable          #-}
-{-# LANGUAGE EmptyCase                  #-}
-{-# LANGUAGE ExistentialQuantification  #-}
-{-# LANGUAGE FlexibleContexts           #-}
-{-# LANGUAGE FlexibleInstances          #-}
-{-# LANGUAGE GADTs                      #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE InstanceSigs               #-}
-{-# LANGUAGE LambdaCase                 #-}
-{-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE PatternSynonyms            #-}
-{-# LANGUAGE RankNTypes                 #-}
-{-# LANGUAGE ScopedTypeVariables        #-}
-{-# LANGUAGE StandaloneDeriving         #-}
-{-# LANGUAGE TemplateHaskell            #-}
-{-# LANGUAGE TypeApplications           #-}
-{-# LANGUAGE TypeFamilies               #-}
-{-# LANGUAGE TypeOperators              #-}
-{-# LANGUAGE UndecidableInstances       #-}
+{-# LANGUAGE DeriveGeneric             #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE GADTs                     #-}
+{-# LANGUAGE InstanceSigs              #-}
+{-# LANGUAGE KindSignatures            #-}
+{-# LANGUAGE LambdaCase                #-}
+{-# LANGUAGE RankNTypes                #-}
+{-# LANGUAGE ScopedTypeVariables       #-}
+{-# LANGUAGE TypeOperators             #-}
 
 module Types where
 
-import           Control.Monad.Except
-import           Control.Monad.Reader
-import           Control.Monad.Writer.Strict
-
-import           Data.Text                   (Text)
-import qualified Data.Text                   as Text
-import qualified Data.Text.IO                as Text
-import           Data.Vector                 (Vector)
-import qualified Data.Vector                 as Vector
-
-import qualified Hedgehog                    as H
-import qualified Hedgehog.Gen                as HG
-import qualified Hedgehog.Range              as HR
-
-import           Control.Comonad
 import           Control.Lens
-import           Control.Monad
-import           Control.Monad.Fix
-import           Data.Deriving
-import           Data.Foldable
-import           Data.Function
-import           Data.Functor
-import           Data.Functor.Classes
-import           Data.Maybe
-import           Data.Semigroup              (Semigroup)
-import           Data.Traversable
+import           Data.Text          (Text)
 import           Data.Type.Equality
-import           Data.Unique
-import           Data.Void
-import GHC.Show
-
+import           GHC.Generics       (Generic)
 import           Unsafe.Coerce
-import GHC.Generics (Generic)
 
-import Pretty
+import           Pretty
 
 type (~>) f g = forall x. f x -> g x
 type (|>) f a = forall x. f x -> a

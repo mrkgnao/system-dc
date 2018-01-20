@@ -19,7 +19,6 @@ executable:
 
 dependencies:
   - base
-  - bound
   - prettyprinter
   - prettyprinter-ansi-terminal
   - deriving-compat
